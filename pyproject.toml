@@ -1,0 +1,19 @@
+[tool.poetry]
+name = "fluxsession"
+version = "0.1.0"
+description = "A Session converter for Telegram unoffical client."
+authors = ["Md. Hasibul Kabir <46620128+HasibulKabir@users.noreply.github.com>"]
+readme = "README.md"
+
+[tool.poetry.dependencies]
+telethon = "^1.25.4"
+pydantic = "^1.10.2"
+
+
+[tool.poetry.group.dev.dependencies]
+black = {version = "^22.10.0", allow-prereleases = true}
+flake8 = "^5.0.4"
+
+[build-system]
+requires = ["poetry-core"]
+build-backend = "poetry.core.masonry.api"
