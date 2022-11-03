@@ -3,6 +3,7 @@ import ipaddress
 import sqlite3
 import struct
 from enum import Enum
+from os import getenv
 
 from pydantic import BaseModel, Field
 from telethon.sessions import StringSession
@@ -142,7 +143,11 @@ class SessionManager:
         )
 
         if do_login:
-            client = TelegramClient(StringSession("1" + session_string), 12345, "1234567890abcdef")
+            client = TelegramClient(
+                StringSession("1" + session_string),
+                int(getenv("FLUX_SESSION_API_ID", 12345)),
+                getenv("FLUX_SESSION_API_HASH", "0123456789abcdef0123456789abcdef"),
+            )
             client.connect()
             if client.is_user_authorized():
                 user = client.get_me()
@@ -163,6 +168,41 @@ class SessionManager:
             port=port,
         )
         return cls(session)
+
+    @classmethod
+    def from_telethon_file(cls, file: str, do_login: bool = False) -> "SessionManager":
+        try:
+            conn = sqlite3.connect(file, check_same_thread=False)
+            version = conn.execute("SELECT version from version;").fetchone()[0]
+            authorization = conn.execute("SELECT * from sessions;").fetchone()
+            conn.close()
+        except sqlite3.DatabaseError:
+            raise ValueError("Invalid Telethon session file")
+
+        if version == 7:
+            session = TDSession(
+                dc_id=authorization[0],
+                test_mode=authorization[2] == 80,
+                auth_key=authorization[3],
+                port=authorization[2],
+            )
+            cls_obj = cls(session)
+            if do_login:
+                string_session = cls_obj.telethon_string_session()
+                client = TelegramClient(
+                    StringSession(string_session),
+                    int(getenv("FLUX_SESSION_API_ID", 12345)),
+                    getenv("FLUX_SESSION_API_HASH", "0123456789abcdef0123456789abcdef"),
+                )
+                client.connect()
+                if client.is_user_authorized():
+                    user = client.get_me()
+                    cls_obj.session.user_id = user.id
+                    cls_obj.session.is_bot = user.bot
+            return cls_obj
+
+        else:
+            raise ValueError("Invalid version")
 
     def pyrogram_string_session(self, version: int = 3, api_id: int = 0) -> str:
         """Export the session as a string.
@@ -225,3 +265,88 @@ class SessionManager:
                 self.session.auth_key,
             )
         ).decode("ascii")
+
+    def telethon_file(self, file: str):
+        conn = sqlite3.connect(file, check_same_thread=False)
+        conn.execute("CREATE TABLE IF NOT EXISTS version (version INTEGER PRIMARY KEY);")
+        conn.execute(
+            """CREATE TABLE IF NOT EXISTS sessions (
+                    dc_id INTEGER PRIMARY KEY, 
+                    server_address TEXT, 
+                    port INTEGER, 
+                    auth_key BLOB,
+                    takeout_id INTEGER
+                );
+            """
+        )
+        conn.execute("INSERT INTO version VALUES (?);", (7,))
+        conn.execute(
+            "INSERT INTO sessions VALUES (?, ?, ?, ?, ?);",
+            (
+                self.session.dc_id,
+                self.session.server_address.packed,
+                self.session.port,
+                self.session.auth_key,
+                0,
+            ),
+        )
+        conn.commit()
+        conn.close()
+        return file
+
+    def pyrogram_file(self, file: str, **kwargs):
+        conn = sqlite3.connect(file, check_same_thread=False)
+        SCHEMA = """CREATE TABLE sessions
+                    (
+                        dc_id     INTEGER PRIMARY KEY,
+                        api_id    INTEGER,
+                        test_mode INTEGER,
+                        auth_key  BLOB,
+                        date      INTEGER NOT NULL,
+                        user_id   INTEGER,
+                        is_bot    INTEGER
+                    );
+                    CREATE TABLE peers
+                    (
+                        id             INTEGER PRIMARY KEY,
+                        access_hash    INTEGER,
+                        type           INTEGER NOT NULL,
+                        username       TEXT,
+                        phone_number   TEXT,
+                        last_update_on INTEGER NOT NULL DEFAULT (CAST(STRFTIME('%s', 'now') AS INTEGER))
+                    );
+                    CREATE TABLE version
+                    (
+                        number INTEGER PRIMARY KEY
+                    );
+                    CREATE INDEX idx_peers_id ON peers (id);
+                    CREATE INDEX idx_peers_username ON peers (username);
+                    CREATE INDEX idx_peers_phone_number ON peers (phone_number);
+                    CREATE TRIGGER trg_peers_last_update_on
+                        AFTER UPDATE
+                        ON peers
+                    BEGIN
+                        UPDATE peers
+                        SET last_update_on = CAST(STRFTIME('%s', 'now') AS INTEGER)
+                        WHERE id = NEW.id;
+                    END;
+        """
+        conn.executescript(SCHEMA)
+        conn.execute("INSERT INTO version VALUES (?)", (2,))
+        conn.execute(
+            "INSERT INTO sessions VALUES (?, ?, ?, ?, ?, ?, ?)",
+            (2, None, None, None, 0, None, None),
+        )
+        for k, v in {
+            "dc_id": self.session.dc_id,
+            "api_id": int(kwargs.get("api_id")) or self.session.api_id,
+            "test_mode": self.session.test_mode,
+            "auth_key": self.session.auth_key,
+            "date": 0,
+            "user_id": int(kwargs.get("user_id")) or self.session.user_id,
+            "is_bot": bool(kwargs.get("is_bot")) or self.session.is_bot,
+        }.items():
+            conn.execute(f"UPDATE sessions SET {k} = ?", (v,))
+        conn.commit()
+        conn.close()
+        return True
