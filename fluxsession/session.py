@@ -220,20 +220,36 @@ class SessionManager:
         """
 
         if version == 2:
-            return (
-                base64.urlsafe_b64encode(
-                    struct.pack(
-                        ">B?256sI?",
-                        self.session.dc_id,
-                        self.session.test_mode,
-                        self.session.auth_key,
-                        self.session.user_id,
-                        self.session.is_bot,
+            if self.session.user_id > 2**32:
+                return (
+                    base64.urlsafe_b64encode(
+                        struct.pack(
+                            ">B?256sQ?",
+                            self.session.dc_id,
+                            self.session.test_mode,
+                            self.session.auth_key,
+                            self.session.user_id,
+                            self.session.is_bot,
+                        )
                     )
+                    .decode()
+                    .rstrip("=")
                 )
-                .decode()
-                .rstrip("=")
-            )
+            else:
+                return (
+                    base64.urlsafe_b64encode(
+                        struct.pack(
+                            ">B?256sI?",
+                            self.session.dc_id,
+                            self.session.test_mode,
+                            self.session.auth_key,
+                            self.session.user_id,
+                            self.session.is_bot,
+                        )
+                    )
+                    .decode()
+                    .rstrip("=")
+                )
 
         elif version == 3:
             return (
